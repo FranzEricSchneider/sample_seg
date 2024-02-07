@@ -25,7 +25,6 @@ ZCA_DEWHITEN = "zca_dewhiten.npy"
 
 
 class Mosaiks:
-
     def __init__(self, savedir):
         self.features = numpy.load(savedir.joinpath(PATCHES))
 
@@ -58,7 +57,7 @@ class Mosaiks:
                 shape[1] - self.m + 1,
                 -1,
             )
-        ).astype(numpy.float16)
+        )
 
 
 def rgbim(impath, downsample=1):
@@ -94,7 +93,7 @@ def create_feature_set(impaths, savedir, m=3, k=512, downsample=1):
             # Flatten the patches (e.g. 3x3x3 becomes 1x27), we will need to
             # imitate a convolution using flattened (and correctly indexed)
             # image values
-            patch = rgb[ipix: ipix + m, jpix: jpix + m, :].flatten()
+            patch = rgb[ipix : ipix + m, jpix : jpix + m, :].flatten()
             patches.append(patch)
             patches.append(-1 * patch)
 
@@ -115,11 +114,13 @@ def flattened_view(image, patch_size):
     """
     Flatten an image such that a dot product is the same as convolution
     """
-    return numpy.array([
-        image[i:i+patch_size[0], j:j+patch_size[1], :].flatten()
-        for i in range(image.shape[0] - patch_size[0] + 1)
-        for j in range(image.shape[1] - patch_size[1] + 1)
-    ]).T
+    return numpy.array(
+        [
+            image[i : i + patch_size[0], j : j + patch_size[1], :].flatten()
+            for i in range(image.shape[0] - patch_size[0] + 1)
+            for j in range(image.shape[1] - patch_size[1] + 1)
+        ]
+    ).T
 
 
 def visualize_knn(vpath, k=4):
@@ -136,7 +137,7 @@ def visualize_knn(vpath, k=4):
     pyplot.savefig(vpath.with_suffix(".png"))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     imdir = Path("/home/fschneider/Downloads/LABELLING/DOWNLOAD")
     assert imdir.is_dir()
     impaths = sorted(imdir.glob("*jpg"))[150:-1:100]
@@ -151,4 +152,7 @@ if __name__ == '__main__':
     for impath, vectorized in M.process(impaths, downsample=4):
         numpy.save(impath.with_suffix(".npy"), vectorized)
         visualize_knn(impath.with_suffix(".npy"))
-        import ipdb; ipdb.set_trace(); pass
+        import ipdb
+
+        ipdb.set_trace()
+        pass
