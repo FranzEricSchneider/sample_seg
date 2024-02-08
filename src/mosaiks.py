@@ -36,28 +36,37 @@ class Mosaiks:
         self.m = int(numpy.sqrt(self.features.shape[1] / 3) + 0.5)
         self.patch_size = (self.m,) * 2
 
+        # Renaming for external use
+        self.window = self.m
+
         # Prepare the features by baking in the whitening (mentioned in
         # footnote 14 of the MOSAIKS supplementals)
         # https://static-content.springer.com/esm/art%3A10.1038%2Fs41467-021-24638-z/MediaObjects/41467_2021_24638_MOESM1_ESM.pdf
         self.prewhite_features = self.features @ self.zca.whiten_
 
-    def process(self, impaths, downsample=1):
+    def process_images(self, impaths, downsample=1):
         for impath in tqdm(impaths):
             rgb = rgbim(impath, downsample)
-            yield impath, self.apply(flattened_view(rgb, self.patch_size), rgb.shape)
+            yield (
+                impath,
+                self.apply(flatten_image(rgb, self.patch_size)).reshape(
+                    (
+                        rgb.shape[0] - self.m + 1,
+                        rgb.shape[1] - self.m + 1,
+                        -1,
+                    )
+                ),
+            )
 
-    def apply(self, view, shape):
+    def transform(self, patches):
+        return self.apply(flatten_patches(patches))
+
+    def apply(self, view):
         """view: 27xM convolutional view into the image"""
         return numpy.dot(
             self.prewhite_features,
             view - self.zca.mean_.reshape((-1, 1)),
-        ).T.reshape(
-            (
-                shape[0] - self.m + 1,
-                shape[1] - self.m + 1,
-                -1,
-            )
-        )
+        ).T
 
 
 def rgbim(impath, downsample=1):
@@ -110,7 +119,7 @@ def create_feature_set(impaths, savedir, m=3, k=512, downsample=1):
     numpy.save(savedir.joinpath(ZCA_DEWHITEN), whitener.dewhiten_)
 
 
-def flattened_view(image, patch_size):
+def flatten_image(image, patch_size):
     """
     Flatten an image such that a dot product is the same as convolution
     """
@@ -121,6 +130,14 @@ def flattened_view(image, patch_size):
             for j in range(image.shape[1] - patch_size[1] + 1)
         ]
     ).T
+
+
+def flatten_patches(patches):
+    """
+    Flatten a list of patches (window, window, 3) such that a dot product is
+    the same as convolution
+    """
+    return numpy.array([patch.flatten() for patch in patches]).T
 
 
 def visualize_knn(vpath, k=4):
@@ -146,13 +163,9 @@ if __name__ == "__main__":
     if not savedir.is_dir():
         savedir.mkdir()
 
-    # create_feature_set(impaths, savedir, downsample=4)
+    create_feature_set(impaths, savedir, downsample=4, k=128)
 
     M = Mosaiks(savedir)
-    for impath, vectorized in M.process(impaths, downsample=4):
+    for impath, vectorized in M.process_images(impaths, downsample=4):
         numpy.save(impath.with_suffix(".npy"), vectorized)
         visualize_knn(impath.with_suffix(".npy"))
-        import ipdb
-
-        ipdb.set_trace()
-        pass

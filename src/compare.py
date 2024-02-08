@@ -11,10 +11,11 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
-from sampling import get_patches, ingest
+from mosaiks import Mosaiks
+from sampling import get_patches, get_labels, ingest, smart_downsample
 
 
-def supervised_test(sample_path, mosdir, test_size=0.3):
+def supervised_test(imdir, sample_path, mosdir, test_size=0.3):
 
     samples = ingest(sample_path)
 
@@ -30,33 +31,50 @@ def supervised_test(sample_path, mosdir, test_size=0.3):
         # "TODO": TODO(savedir),
     }
 
+    # NOTE: Linear SVMs take a long time to fit on many data points. Downsample
+    # the points for them somehow.
     classifiers = {
-        "Linear SVM": SVC(kernel="linear"),
-        "RBF SVM": SVC(kernel="rbf"),
         "k-NN": KNeighborsClassifier(n_neighbors=5),
         "Decision Tree": DecisionTreeClassifier(),
         "Random Forest": RandomForestClassifier(n_estimators=50),
+        "RBF SVM": SVC(kernel="rbf"),
+        "Linear SVM": SVC(kernel="linear"),
+    }
+    # TODO: Expand these limits later (slowing runtime) for performance
+    classifier_limits = {
+        "Linear SVM": 200,
     }
 
     results = {}
 
     for downsample in [1, 2, 4, 8]:
+
         for fname, featurator in featurators.items():
+
+            vectors = {}
+            for name, samples in [("train", train_samples), ("test", test_samples)]:
+                patches = get_patches(
+                    imdir=imdir,
+                    samples=samples,
+                    downsample=downsample,
+                    window=featurator.window,
+                )
+                vectors[name] = featurator.transform(patches)
+            print("Vectors calculated")
+
             for cname, classifier in classifiers.items():
 
-                vectors = {}
-                for name, samples in [("train", train_samples), ("test", test_samples)]:
-
-                    pass
-                    # patches = get_patches(
-                    #     samples,
-                    #     downsample=downsample,
-                    #     window=featurator.window,
-                    # )
-                    # vectors[name] = featurator.transform(patches)
+                train_labels = get_labels(train_samples)
+                train_vectors = vectors["train"]
+                if cname in classifier_limits:
+                    train_vectors, indices = smart_downsample(
+                        train_vectors,
+                        classifier_limits[cname],
+                    )
+                    train_labels = [train_labels[i] for i in indices]
 
                 # Train
-                classifier.fit(vectors["train"], get_labels(train_samples))
+                classifier.fit(train_vectors, train_labels)
 
                 # And test
                 actual = get_labels(test_samples)
@@ -66,11 +84,19 @@ def supervised_test(sample_path, mosdir, test_size=0.3):
                     "F1": f1_score(actual, predicted, average="weighted"),
                 }
 
+    for cname, stats in sorted(results.items()):
+        print(f"{cname:<30} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}")
+
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "imdir",
+        help="Path to the directory with all of the original images",
+        type=Path,
     )
     parser.add_argument(
         "samples",
@@ -85,6 +111,19 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
     assert args.samples.is_file(), f"{args.samples.absolute()} is not a file"
 
-    supervised_test(args.samples)
+    from cProfile import Profile
+
+    profile = Profile()
+    profile.enable()
+
+    supervised_test(
+        imdir=args.imdir,
+        sample_path=args.samples,
+        mosdir=args.mosaic_dir,
+    )
+
+    profile.disable()
+    profile.dump_stats("/tmp/compare.snakeviz")
