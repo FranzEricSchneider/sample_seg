@@ -5,6 +5,7 @@ A basic, partial representation of the patch-based featurization from
 Found here: https://www.nature.com/articles/s41467-021-24638-z
 """
 
+import argparse
 from collections import Counter
 import cv2
 from matplotlib import pyplot
@@ -155,17 +156,57 @@ def visualize_knn(vpath, k=4):
 
 
 if __name__ == "__main__":
-    imdir = Path("/home/fschneider/Downloads/LABELLING/DOWNLOAD")
-    assert imdir.is_dir()
-    impaths = sorted(imdir.glob("*jpg"))[150:-1:100]
 
-    savedir = Path("/home/fschneider/Downloads/MOSAIKS/")
-    if not savedir.is_dir():
-        savedir.mkdir()
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "imdir",
+        help="Path to the directory with all of the original images",
+        type=Path,
+    )
+    parser.add_argument(
+        "savedir",
+        help="Path to the directory where we want to save the created files",
+        type=Path,
+    )
+    parser.add_argument(
+        "-d",
+        "--downsample",
+        help="Downsample value when creating the features",
+        type=int,
+        default=8,
+    )
+    parser.add_argument(
+        "-k",
+        "--channels",
+        help="Number of feature channels to have",
+        type=int,
+        default=128,
+    )
+    parser.add_argument(
+        "-v",
+        "--visualize",
+        help="Whether or not to visualize some of the images (slow)",
+        action="store_true",
+    )
+    args = parser.parse_args()
 
-    create_feature_set(impaths, savedir, downsample=4, k=128)
+    assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
 
-    M = Mosaiks(savedir)
-    for impath, vectorized in M.process_images(impaths, downsample=4):
-        numpy.save(impath.with_suffix(".npy"), vectorized)
-        visualize_knn(impath.with_suffix(".npy"))
+    impaths = sorted(args.imdir.glob("*jpg"))
+
+    if not args.savedir.is_dir():
+        args.savedir.mkdir()
+    create_feature_set(
+        impaths, args.savedir, downsample=args.downsample, k=args.channels
+    )
+
+    if args.visualize:
+        M = Mosaiks(args.savedir)
+        indices = numpy.random.randint(0, len(impaths), size=5)
+        for impath, vectorized in M.process_images(
+            [impaths[i] for i in indices], downsample=args.downsample
+        ):
+            numpy.save(impath.with_suffix(".npy"), vectorized)
+            visualize_knn(impath.with_suffix(".npy"))

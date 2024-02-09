@@ -40,6 +40,7 @@ def create_samples(imdir, rename=None):
         if numpy.any(red):
             for i, j in zip(*numpy.where(red)):
                 samples.append([name, [int(i), int(j)], "plant"])
+
     return samples
 
 
