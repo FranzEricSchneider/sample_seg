@@ -3,7 +3,7 @@ Helper functions to deal with samples
 """
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import cv2
 import json
 import numpy
@@ -44,9 +44,25 @@ def create_samples(imdir, rename=None):
     return samples
 
 
-def ingest(path):
+def ingest(path, make_even=False):
     assert path.name.endswith(".json"), f"{path} must be json"
-    return json.load(path.open("r"))
+    samples = json.load(path.open("r"))
+    if make_even:
+        labels = numpy.array(get_labels(samples))
+        counted = Counter(labels)
+        least = min(counted.values())
+        include = []
+        for label in set(labels):
+            if counted[label] == least:
+                include.extend(numpy.where(labels == label)[0].tolist())
+            else:
+                choices = numpy.where(labels == label)[0]
+                include.extend(
+                    numpy.random.choice(choices, size=least, replace=False).tolist()
+                )
+        return [samples[i] for i in sorted(include)]
+    else:
+        return samples
 
 
 def get_patches(imdir, samples, downsample, window):

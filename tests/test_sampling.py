@@ -1,3 +1,4 @@
+from collections import Counter
 import cv2
 import json
 import numpy
@@ -55,6 +56,18 @@ def test_ingest():
     json.dump(SAMPLES, path.open("w"))
     samples = sampling.ingest(path)
     assert samples == SAMPLES
+
+
+def test_ingest_even():
+    path = Path("/tmp/test_ingest.json")
+    json.dump(SAMPLES, path.open("w"))
+    samples = sampling.ingest(path, make_even=True)
+
+    # Check that we have an even number of labels
+    assert len(samples) % 2 == 0
+    counted = Counter(sampling.get_labels(samples))
+    for label, count in counted.items():
+        assert (count == numpy.array(list(counted.values()))).all()
 
 
 @pytest.mark.parametrize(

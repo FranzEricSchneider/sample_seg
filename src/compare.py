@@ -18,9 +18,11 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
+from colors import RG, RGB, Gray
 from mosaiks import Mosaiks
 from nn import EfficientNetB1, ResNet50
 from sampling import get_patches, get_labels, ingest, smart_downsample
+from vis import random_patch_vis, vector_vis
 
 
 def save_confusion(cname, stats):
@@ -48,23 +50,30 @@ def rank_stat(results, stat_name, top_x=None, text_values=False):
     # Create a bar graph
     figure = pyplot.figure(figsize=(10, 7))
     pyplot.bar(names, stats)
+    pyplot.ylim(0.9 * min(stats), 1.1 * max(stats))
 
     if text_values:
-        for name, ae in zip(names, stats):
-            pyplot.text(name, ae, f"{ae:.3f}", ha="center", va="bottom")
-        # pyplot.ylim(0, 1.2 * max(stats))
+        for name, point in zip(names, stats):
+            pyplot.text(name, point, f"{point:.3f}", ha="center", va="bottom")
+        pyplot.ylim(0, 1.2 * max(stats))
 
     pyplot.ylabel(stat_name)
     pyplot.title(f"{stat_name} over treatments")
     pyplot.xticks(rotation=90, ha="right")
     pyplot.tight_layout()
-    pyplot.savefig(f"/tmp/ranked_{stat_name}.png")
+    path = f"/tmp/ranked_{stat_name}.png"
+    pyplot.savefig(path)
     pyplot.close()
+    print(f"Saved {path}")
 
 
-def supervised_test(imdir, sample_path, mosdir, test_size=0.3):
+def supervised_test(
+    imdir, sample_path, mosdir, pca_vis=False, patch_images=False, test_size=0.3
+):
 
-    samples = ingest(sample_path)
+    # Ingest samples, throwing away random samples until the class numbers are
+    # even
+    samples = ingest(sample_path, make_even=True)
 
     train_samples, test_samples = train_test_split(
         samples,
@@ -74,43 +83,59 @@ def supervised_test(imdir, sample_path, mosdir, test_size=0.3):
 
     featurators = {
         "ResNet": ResNet50(),
-        "EfficientNet": EfficientNetB1(),
+        # "EfficientNet": EfficientNetB1(),
+        f"RG-1": RG(window=1),
     }
-    for d in [1, 4, 8, 16]:
-        for k in [64, 128, 512]:
-            key = f"M-D{d}-{k}"
-            featurators[key] = Mosaiks(mosdir.joinpath(key))
+    # for w in [1, 5]:
+    #     featurators[f"RGB-{w}"] = RGB(window=w)
+    #     featurators[f"Gray-{w}"] = Gray(window=w)
+
+    # for d in [4, 8, 16]:
+    #     for k in [64, 128]:
+    # for d in [1, 4, 8, 16]:
+    #     for k in [64, 128, 512]:
+    #         key = f"M-D{d}-{k}"
+    #         featurators[key] = Mosaiks(mosdir.joinpath(key))
 
     classifiers = {
         "k-NN": KNeighborsClassifier(n_neighbors=5),
-        "Decision Tree": DecisionTreeClassifier(),
-        "Random Forest": RandomForestClassifier(n_estimators=50),
-        "RBF SVM": SVC(kernel="rbf"),
-        "Linear SVM": SVC(kernel="linear"),
+        # "Decision Tree": DecisionTreeClassifier(),
+        # "Random Forest": RandomForestClassifier(n_estimators=50),
+        # "RBF SVM": SVC(kernel="rbf"),
+        # "Linear SVM": SVC(kernel="linear"),
     }
     # NOTE: Linear SVMs take a long time to fit on many data points. Downsample
     # the points for them somehow.
-    # TODO: Expand these limits later (slowing runtime) for performance
     classifier_limits = {
         "Linear SVM": 200,
     }
 
     results = {}
 
-    for downsample in [1, 2, 4, 8]:
+    # for downsample in [1, 2, 4, 8]:
+    for downsample in [8]:
 
         for fname, featurator in featurators.items():
 
+            patches = {}
             vectors = {}
             for name, samples in [("train", train_samples), ("test", test_samples)]:
-                patches = get_patches(
+                patches[name] = get_patches(
                     imdir=imdir,
                     samples=samples,
                     downsample=downsample,
                     window=featurator.window,
                 )
-                vectors[name] = featurator.transform(patches)
+                vectors[name] = featurator.transform(patches[name])
             print("Vectors calculated")
+
+            if pca_vis:
+                vector_vis(
+                    vectors=vectors["train"],
+                    labels=get_labels(train_samples),
+                    savedir=Path("/tmp"),
+                    name=f"{fname}_D-{downsample}",
+                )
 
             for cname, classifier in classifiers.items():
 
@@ -136,6 +161,16 @@ def supervised_test(imdir, sample_path, mosdir, test_size=0.3):
                     "predicted": predicted,
                 }
 
+                if patch_images:
+                    random_patch_vis(
+                        patches=patches["test"],
+                        actual=actual,
+                        predicted=predicted,
+                        number=(10, 16),
+                        savedir=Path("/tmp"),
+                        name=f"{fname}_D-{downsample}_{cname}",
+                    )
+
     for cname, stats in sorted(results.items()):
         print(f"{cname:<30} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}")
         save_confusion(cname, stats)
@@ -155,7 +190,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "samples",
-        help="Path to collected samples",
+        help="Path to collected sample json file",
         type=Path,
     )
     parser.add_argument(
@@ -163,6 +198,18 @@ if __name__ == "__main__":
         "--mosaic-dir",
         help="Directory where a MOSAIKS featurator can be found",
         type=Path,
+    )
+    parser.add_argument(
+        "-p",
+        "--pca-vis",
+        help="Whether to run vis of each vector set into /tmp/. Somewhat slow",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-t",
+        "--patch-images",
+        help="Whether to run vis of patches into /tmp/. Somewhat slow",
+        action="store_true",
     )
     args = parser.parse_args()
 
@@ -178,6 +225,8 @@ if __name__ == "__main__":
         imdir=args.imdir,
         sample_path=args.samples,
         mosdir=args.mosaic_dir,
+        pca_vis=args.pca_vis,
+        patch_images=args.patch_images,
     )
 
     profile.disable()
