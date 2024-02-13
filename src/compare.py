@@ -3,6 +3,8 @@ File for high-level tests of the lower-level components
 """
 
 import argparse
+from cProfile import Profile
+import json
 from matplotlib import pyplot
 import numpy
 from pathlib import Path
@@ -17,9 +19,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+import time
 from tqdm import tqdm
 
 from colors import RG, RGB, Gray
+from fourier import Fourier
 from mosaiks import Mosaiks
 from nn import EfficientNetB1, ResNet50
 from sampling import get_patches, get_labels, ingest, smart_downsample
@@ -49,9 +53,10 @@ def rank_stat(results, stat_name, top_x=None, text_values=False):
         stats = stats[:top_x]
 
     # Create a bar graph
-    figure = pyplot.figure(figsize=(20, 12))
+    figure = pyplot.figure(figsize=(40, 12))
     pyplot.bar(names, stats)
-    pyplot.ylim(0.9 * min(stats), 1.1 * max(stats))
+    pyplot.yticks(numpy.arange(0, 1.05, 0.05))
+    pyplot.ylim(0.9 * min(stats), min(1.0, 1.1 * max(stats)))
 
     if text_values:
         for name, point in zip(names, stats):
@@ -61,6 +66,7 @@ def rank_stat(results, stat_name, top_x=None, text_values=False):
     pyplot.ylabel(stat_name)
     pyplot.title(f"{stat_name} over treatments")
     pyplot.xticks(rotation=90, ha="right")
+    pyplot.grid(axis="y")
     pyplot.tight_layout()
     path = f"/tmp/ranked_{stat_name}.png"
     pyplot.savefig(path)
@@ -85,26 +91,34 @@ def supervised_test(
     featurators = {
         "ResNet": ResNet50(),
         "EfficientNet": EfficientNetB1(),
-        f"RG-1": RG(window=1),
+        "RG-1": RG(window=1),
     }
     for w in [1, 5]:
         featurators[f"RGB-{w}"] = RGB(window=w)
         featurators[f"Gray-{w}"] = Gray(window=w)
 
-    # for d in [4, 8, 16]:
-    #     for k in [64, 128]:
+    for w, d in ((11, 1), (11, 3), (21, 1), (21, 3), (31, 3), (51, 5), (51, 12)):
+        featurators[f"Fourier-W{w}-D{d}"] = Fourier(window=w, downsample=d)
+
     for d in [1, 4, 8, 16]:
         for k in [64, 128, 512]:
             key = f"M-D{d}-{k}"
             featurators[key] = Mosaiks(mosdir.joinpath(key))
+
+    # NOTE: featurators is a dictionary, so we can't rely on the *order* of
+    # windows matching any particular order. Always use lookups
+    windows = set([f.window for f in featurators.values()])
 
     classifiers = {
         "k-NN": KNeighborsClassifier(n_neighbors=5),
         "Decision Tree": DecisionTreeClassifier(),
         "Random Forest": RandomForestClassifier(n_estimators=50),
         "RBF SVM": SVC(kernel="rbf"),
-        "Linear SVM": SVC(kernel="linear"),
+        # NOTE: Too slow to run regularly, AND was consistently a low to mid
+        # performer
+        # "Linear SVM": SVC(kernel="linear"),
     }
+
     # NOTE: Linear SVMs take a long time to fit on many data points. Downsample
     # the points for them somehow.
     classifier_limits = {
@@ -112,7 +126,6 @@ def supervised_test(
     }
 
     downsamplings = [1, 2, 4, 8]
-    results = {}
 
     # Initialize tqdm with the total number of iterations
     progress_bar = tqdm(
@@ -120,20 +133,26 @@ def supervised_test(
         desc="Processing",
     )
 
+    results = {}
     for downsample in downsamplings:
+
+        # Get all patches at once to save time re-opening all those images
+        patches = {
+            name: get_patches(
+                imdir=imdir,
+                samples=samples,
+                downsample=downsample,
+                windows=windows,
+            )
+            for name, samples in [("train", train_samples), ("test", test_samples)]
+        }
 
         for fname, featurator in featurators.items():
 
-            patches = {}
-            vectors = {}
-            for name, samples in [("train", train_samples), ("test", test_samples)]:
-                patches[name] = get_patches(
-                    imdir=imdir,
-                    samples=samples,
-                    downsample=downsample,
-                    window=featurator.window,
-                )
-                vectors[name] = featurator.transform(patches[name])
+            vectors = {
+                name: featurator.transform(patches[name][featurator.window])
+                for name in ["train", "test"]
+            }
 
             if pca_vis:
                 vector_vis(
@@ -164,12 +183,12 @@ def supervised_test(
                     "accuracy": accuracy_score(actual, predicted),
                     "F1": f1_score(actual, predicted, average="weighted"),
                     "actual": actual,
-                    "predicted": predicted,
+                    "predicted": predicted.tolist(),
                 }
 
                 if patch_images:
                     random_patch_vis(
-                        patches=patches["test"],
+                        patches=patches["test"][featurator.window],
                         actual=actual,
                         predicted=predicted,
                         number=(10, 16),
@@ -182,9 +201,17 @@ def supervised_test(
 
     progress_bar.close()
 
-    for cname, stats in sorted(results.items()):
-        print(f"{cname:<30} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}")
-        save_confusion(cname, stats)
+    return results
+
+
+def report_results(results, only_rank=False):
+
+    if not only_rank:
+        for cname, stats in sorted(results.items()):
+            print(
+                f"{cname:<30} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}"
+            )
+            save_confusion(cname, stats)
 
     rank_stat(results, "accuracy")
 
@@ -211,10 +238,22 @@ if __name__ == "__main__":
         type=Path,
     )
     parser.add_argument(
+        "-o",
+        "--only-rank",
+        help="If True, only display ranked results, not individual",
+        action="store_true",
+    )
+    parser.add_argument(
         "-p",
         "--pca-vis",
         help="Whether to run vis of each vector set into /tmp/. Somewhat slow",
         action="store_true",
+    )
+    parser.add_argument(
+        "-r",
+        "--saved-results",
+        help="json file with results we want to re-view",
+        type=Path,
     )
     parser.add_argument(
         "-t",
@@ -224,21 +263,29 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
-    assert args.samples.is_file(), f"{args.samples.absolute()} is not a file"
+    if args.saved_results:
+        results = json.load(args.saved_results.open("r"))
+    else:
+        assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
+        assert args.samples.is_file(), f"{args.samples.absolute()} is not a file"
 
-    from cProfile import Profile
+        profile = Profile()
+        profile.enable()
 
-    profile = Profile()
-    profile.enable()
+        results = supervised_test(
+            imdir=args.imdir,
+            sample_path=args.samples,
+            mosdir=args.mosaic_dir,
+            pca_vis=args.pca_vis,
+            patch_images=args.patch_images,
+        )
+        path = Path(f"/tmp/sweep_results_{int(time.time())}.json")
+        json.dump(results, path.open("w"), indent=4, sort_keys=True)
+        print(f"Results saved to {path}")
 
-    supervised_test(
-        imdir=args.imdir,
-        sample_path=args.samples,
-        mosdir=args.mosaic_dir,
-        pca_vis=args.pca_vis,
-        patch_images=args.patch_images,
-    )
+        profile.disable()
+        path = "/tmp/compare.snakeviz"
+        profile.dump_stats(path)
+        print(f"Profile data saved to {path}")
 
-    profile.disable()
-    profile.dump_stats("/tmp/compare.snakeviz")
+    report_results(results, only_rank=args.only_rank)

@@ -65,9 +65,12 @@ def ingest(path, make_even=False):
         return samples
 
 
-def get_patches(imdir, samples, downsample, window):
+def get_patches(imdir, samples, downsample, windows):
 
-    assert window % 2 == 1, f"Window ({window}) should be odd"
+    for window in windows:
+        assert window % 2 == 1, f"Windows ({windows}) should be odd"
+    assert len(windows) == len(set(windows)), f"windows ({windows}) must be unique"
+
     assert isinstance(downsample, int), f"Downsample ({downsample}) should be int"
     assert downsample > 0, f"Downsample ({downsample}) should be > 0"
 
@@ -78,8 +81,10 @@ def get_patches(imdir, samples, downsample, window):
 
     # Track the patches that we collect and the original samples indices those
     # patches correspond to (for eventual reordering)
-    patches = []
+    patches = defaultdict(list)
     indices = []
+
+    max_window = max(windows)
 
     for imname, sample_ids in sorted(sampled_ims.items()):
         impath = imdir.joinpath(imname)
@@ -93,7 +98,7 @@ def get_patches(imdir, samples, downsample, window):
         # pad_width: ((before/after), (before/after), (before/after))
         rgb = numpy.pad(
             rgb,
-            pad_width=((window,) * 2,) * 2 + ((0, 0),),
+            pad_width=((max_window,) * 2,) * 2 + ((0, 0),),
             mode="constant",
             constant_values=0,
         )
@@ -104,15 +109,20 @@ def get_patches(imdir, samples, downsample, window):
             if downsample > 1:
                 pixel = ((numpy.array(pixel) / downsample) + 0.5).astype(int)
 
-            # The extra (+window) term is to account for the padding
-            ipix = pixel[0] - (window // 2) + window
-            jpix = pixel[1] - (window // 2) + window
+            for window in windows:
+                # The extra (+max_window) term is to account for the padding
+                ipix = pixel[0] - (window // 2) + max_window
+                jpix = pixel[1] - (window // 2) + max_window
 
-            patches.append(rgb[ipix : ipix + window, jpix : jpix + window].copy())
+                patches[window].append(
+                    rgb[ipix : ipix + window, jpix : jpix + window].copy()
+                )
+
             indices.append(i)
 
     # Re-sort the patches into the original sample order
-    return [patch for _, patch in sorted(zip(indices, patches))]
+    order = numpy.argsort(indices)
+    return {window: [patches[window][i] for i in order] for window in windows}
 
 
 def get_labels(samples):

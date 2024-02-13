@@ -71,7 +71,7 @@ def test_ingest_even():
 
 
 @pytest.mark.parametrize(
-    "samples, downsample, window, results",
+    "samples, downsample, windows, results",
     (
         # Basic, window of 3
         (
@@ -81,14 +81,16 @@ def test_ingest_even():
                 ["test_patch_1.png", [7, 4], None],
             ],
             1,
-            3,
+            [3],
             [
-                {0: 33, 1: 44, 2: 55},
-                {0: 26, 2: 48},
-                {1: 85, 2: 96},
+                [
+                    {0: 33, 1: 44, 2: 55},
+                    {0: 26, 2: 48},
+                    {1: 85, 2: 96},
+                ],
             ],
         ),
-        # Try a window of 5
+        # Try windows of 3 and 5
         (
             [
                 ["test_patch_1.png", [3, 3], None],
@@ -96,11 +98,18 @@ def test_ingest_even():
                 ["test_patch_1.png", [6, 4], None],
             ],
             1,
-            5,
+            [3, 5],
             [
-                {0: 22, 2: 44, 4: 66},
-                {0: 15, 2: 37},
-                {1: 64, 4: 97},
+                [
+                    {0: 33, 1: 44, 2: 55},
+                    {0: 26, 2: 48},
+                    {1: 75, 2: 86},
+                ],
+                [
+                    {0: 22, 2: 44, 4: 66},
+                    {0: 15, 2: 37},
+                    {1: 64, 4: 97},
+                ],
             ],
         ),
         # Try downsample of 2, odd indices will round up
@@ -111,11 +120,13 @@ def test_ingest_even():
                 ["test_patch_1.png", [5, 3], None],
             ],
             2,
-            3,
+            [3],
             [
-                {0: 11, 1: 33, 2: 55},
-                {0: 35, 1: 57, 2: 79},
-                {0: 53, 1: 75, 2: 97},
+                [
+                    {0: 11, 1: 33, 2: 55},
+                    {0: 35, 1: 57, 2: 79},
+                    {0: 53, 1: 75, 2: 97},
+                ],
             ],
         ),
         # Downsample of 3, indices will round (we can only place in the middle)
@@ -125,10 +136,12 @@ def test_ingest_even():
                 ["test_patch_1.png", [3, 4], None],
             ],
             3,
-            3,
+            [3],
             [
-                {0: 11, 1: 44, 2: 77},
-                {0: 11, 1: 44, 2: 77},
+                [
+                    {0: 11, 1: 44, 2: 77},
+                    {0: 11, 1: 44, 2: 77},
+                ],
             ],
         ),
         # Try going off the edge
@@ -139,11 +152,13 @@ def test_ingest_even():
                 ["test_patch_1.png", [0, 6], None],
             ],
             1,
-            3,
+            [3],
             [
-                {0: 88, 1: 99, 2: 0},
-                {0: 83, 1: 94, 2: 0},
-                {0: 0, 1: 17, 2: 28},
+                [
+                    {0: 88, 1: 99, 2: 0},
+                    {0: 83, 1: 94, 2: 0},
+                    {0: 0, 1: 17, 2: 28},
+                ],
             ],
         ),
         # Off the edge with more downsampling (odd indices round up)
@@ -154,11 +169,13 @@ def test_ingest_even():
                 ["test_patch_1.png", [0, 7], None],
             ],
             2,
-            5,
+            [5],
             [
-                {0: 0, 1: 0, 2: 11, 3: 33, 4: 55},
-                {0: 51, 1: 73, 2: 95, 3: 0, 4: 0},
-                {0: 0, 1: 0, 2: 19, 3: 0, 4: 0},
+                [
+                    {0: 0, 1: 0, 2: 11, 3: 33, 4: 55},
+                    {0: 51, 1: 73, 2: 95, 3: 0, 4: 0},
+                    {0: 0, 1: 0, 2: 19, 3: 0, 4: 0},
+                ],
             ],
         ),
         # Test that even drawing from multiple images the order of the samples
@@ -170,16 +187,23 @@ def test_ingest_even():
                 ["test_patch_1.png", [7, 4], None],
             ],
             1,
-            3,
+            [3, 7],
             [
-                {0: 33, 1: 44, 2: 55},
-                {0: 26, 2: 48},
-                {1: 85, 2: 96},
+                [
+                    {0: 33, 1: 44, 2: 55},
+                    {0: 26, 2: 48},
+                    {1: 85, 2: 96},
+                ],
+                [
+                    {0: 11, 3: 44, 6: 77},
+                    {0: 0, 3: 37, 6: 0},
+                    {0: 52, 2: 74, 3: 85, 4: 96, 5: 0},
+                ],
             ],
         ),
     ),
 )
-def test_get_patches(samples, downsample, window, results):
+def test_get_patches(samples, downsample, windows, results):
 
     test_im = numpy.array(
         [
@@ -200,16 +224,20 @@ def test_get_patches(samples, downsample, window, results):
     cv2.imwrite("/tmp/test_patch_2.png", test_im)
 
     patches = sampling.get_patches(
-        imdir=Path("/tmp/"), samples=samples, downsample=downsample, window=window
+        imdir=Path("/tmp/"), samples=samples, downsample=downsample, windows=windows
     )
-    assert len(patches) == len(results)
+    assert isinstance(patches, dict)
+    for patch_set in patches.values():
+        assert len(patch_set) == len(results[0])
 
-    for patch in patches:
-        assert patch.shape == (window, window, 3)
+    for window, patch_set in patches.items():
+        for patch in patch_set:
+            assert patch.shape == (window, window, 3)
 
-    for patch, result in zip(patches, results):
-        for i, value in result.items():
-            assert numpy.allclose(patch[i, i], value)
+    for window, result_set in zip(windows, results):
+        for patch, result in zip(patches[window], result_set):
+            for i, value in result.items():
+                assert numpy.allclose(patch[i, i], value)
 
 
 def test_smart_downsample():
