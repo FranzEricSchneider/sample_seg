@@ -76,9 +76,9 @@ def test_ingest_even():
         # Basic, window of 3
         (
             [
-                ["test_patch.png", [3, 3], None],
-                ["test_patch.png", [2, 6], None],
-                ["test_patch.png", [7, 4], None],
+                ["test_patch_1.png", [3, 3], None],
+                ["test_patch_1.png", [2, 6], None],
+                ["test_patch_1.png", [7, 4], None],
             ],
             1,
             3,
@@ -91,9 +91,9 @@ def test_ingest_even():
         # Try a window of 5
         (
             [
-                ["test_patch.png", [3, 3], None],
-                ["test_patch.png", [2, 6], None],
-                ["test_patch.png", [6, 4], None],
+                ["test_patch_1.png", [3, 3], None],
+                ["test_patch_1.png", [2, 6], None],
+                ["test_patch_1.png", [6, 4], None],
             ],
             1,
             5,
@@ -106,9 +106,9 @@ def test_ingest_even():
         # Try downsample of 2, odd indices will round up
         (
             [
-                ["test_patch.png", [2, 2], None],
-                ["test_patch.png", [3, 6], None],
-                ["test_patch.png", [5, 3], None],
+                ["test_patch_1.png", [2, 2], None],
+                ["test_patch_1.png", [3, 6], None],
+                ["test_patch_1.png", [5, 3], None],
             ],
             2,
             3,
@@ -121,8 +121,8 @@ def test_ingest_even():
         # Downsample of 3, indices will round (we can only place in the middle)
         (
             [
-                ["test_patch.png", [2, 2], None],
-                ["test_patch.png", [3, 4], None],
+                ["test_patch_1.png", [2, 2], None],
+                ["test_patch_1.png", [3, 4], None],
             ],
             3,
             3,
@@ -134,9 +134,9 @@ def test_ingest_even():
         # Try going off the edge
         (
             [
-                ["test_patch.png", [8, 8], None],
-                ["test_patch.png", [8, 3], None],
-                ["test_patch.png", [0, 6], None],
+                ["test_patch_1.png", [8, 8], None],
+                ["test_patch_1.png", [8, 3], None],
+                ["test_patch_1.png", [0, 6], None],
             ],
             1,
             3,
@@ -149,9 +149,9 @@ def test_ingest_even():
         # Off the edge with more downsampling (odd indices round up)
         (
             [
-                ["test_patch.png", [0, 0], None],
-                ["test_patch.png", [8, 3], None],
-                ["test_patch.png", [0, 7], None],
+                ["test_patch_1.png", [0, 0], None],
+                ["test_patch_1.png", [8, 3], None],
+                ["test_patch_1.png", [0, 7], None],
             ],
             2,
             5,
@@ -159,6 +159,22 @@ def test_ingest_even():
                 {0: 0, 1: 0, 2: 11, 3: 33, 4: 55},
                 {0: 51, 1: 73, 2: 95, 3: 0, 4: 0},
                 {0: 0, 1: 0, 2: 19, 3: 0, 4: 0},
+            ],
+        ),
+        # Test that even drawing from multiple images the order of the samples
+        # is respected
+        (
+            [
+                ["test_patch_2.png", [3, 3], None],
+                ["test_patch_1.png", [2, 6], None],
+                ["test_patch_1.png", [7, 4], None],
+            ],
+            1,
+            3,
+            [
+                {0: 33, 1: 44, 2: 55},
+                {0: 26, 2: 48},
+                {1: 85, 2: 96},
             ],
         ),
     ),
@@ -180,7 +196,8 @@ def test_get_patches(samples, downsample, window, results):
         dtype=numpy.uint8,
     )
     test_im = numpy.dstack([test_im] * 3)
-    cv2.imwrite("/tmp/test_patch.png", test_im)
+    cv2.imwrite("/tmp/test_patch_1.png", test_im)
+    cv2.imwrite("/tmp/test_patch_2.png", test_im)
 
     patches = sampling.get_patches(
         imdir=Path("/tmp/"), samples=samples, downsample=downsample, window=window

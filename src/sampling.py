@@ -76,8 +76,12 @@ def get_patches(imdir, samples, downsample, window):
     for i, sample in enumerate(samples):
         sampled_ims[sample[0]].append(i)
 
+    # Track the patches that we collect and the original samples indices those
+    # patches correspond to (for eventual reordering)
     patches = []
-    for imname, sample_ids in sampled_ims.items():
+    indices = []
+
+    for imname, sample_ids in sorted(sampled_ims.items()):
         impath = imdir.joinpath(imname)
         assert impath.is_file(), f"Sampled file {impath.absolute()} not found"
         rgb = cv2.cvtColor(cv2.imread(str(impath)), cv2.COLOR_BGR2RGB)
@@ -105,8 +109,10 @@ def get_patches(imdir, samples, downsample, window):
             jpix = pixel[1] - (window // 2) + window
 
             patches.append(rgb[ipix : ipix + window, jpix : jpix + window].copy())
+            indices.append(i)
 
-    return patches
+    # Re-sort the patches into the original sample order
+    return [patch for _, patch in sorted(zip(indices, patches))]
 
 
 def get_labels(samples):
@@ -144,3 +150,5 @@ if __name__ == "__main__":
 
     samples = create_samples(args.imdir, rename=".jpg")
     json.dump(samples, args.save.open("w"), indent=4)
+
+    random_patch_vis(patches, actual, predicted, number, savedir, name)

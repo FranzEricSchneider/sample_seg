@@ -17,6 +17,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+from tqdm import tqdm
 
 from colors import RG, RGB, Gray
 from mosaiks import Mosaiks
@@ -48,7 +49,7 @@ def rank_stat(results, stat_name, top_x=None, text_values=False):
         stats = stats[:top_x]
 
     # Create a bar graph
-    figure = pyplot.figure(figsize=(10, 7))
+    figure = pyplot.figure(figsize=(20, 12))
     pyplot.bar(names, stats)
     pyplot.ylim(0.9 * min(stats), 1.1 * max(stats))
 
@@ -72,7 +73,7 @@ def supervised_test(
 ):
 
     # Ingest samples, throwing away random samples until the class numbers are
-    # even
+    # evenly split
     samples = ingest(sample_path, make_even=True)
 
     train_samples, test_samples = train_test_split(
@@ -83,26 +84,26 @@ def supervised_test(
 
     featurators = {
         "ResNet": ResNet50(),
-        # "EfficientNet": EfficientNetB1(),
+        "EfficientNet": EfficientNetB1(),
         f"RG-1": RG(window=1),
     }
-    # for w in [1, 5]:
-    #     featurators[f"RGB-{w}"] = RGB(window=w)
-    #     featurators[f"Gray-{w}"] = Gray(window=w)
+    for w in [1, 5]:
+        featurators[f"RGB-{w}"] = RGB(window=w)
+        featurators[f"Gray-{w}"] = Gray(window=w)
 
     # for d in [4, 8, 16]:
     #     for k in [64, 128]:
-    # for d in [1, 4, 8, 16]:
-    #     for k in [64, 128, 512]:
-    #         key = f"M-D{d}-{k}"
-    #         featurators[key] = Mosaiks(mosdir.joinpath(key))
+    for d in [1, 4, 8, 16]:
+        for k in [64, 128, 512]:
+            key = f"M-D{d}-{k}"
+            featurators[key] = Mosaiks(mosdir.joinpath(key))
 
     classifiers = {
         "k-NN": KNeighborsClassifier(n_neighbors=5),
-        # "Decision Tree": DecisionTreeClassifier(),
-        # "Random Forest": RandomForestClassifier(n_estimators=50),
-        # "RBF SVM": SVC(kernel="rbf"),
-        # "Linear SVM": SVC(kernel="linear"),
+        "Decision Tree": DecisionTreeClassifier(),
+        "Random Forest": RandomForestClassifier(n_estimators=50),
+        "RBF SVM": SVC(kernel="rbf"),
+        "Linear SVM": SVC(kernel="linear"),
     }
     # NOTE: Linear SVMs take a long time to fit on many data points. Downsample
     # the points for them somehow.
@@ -110,10 +111,16 @@ def supervised_test(
         "Linear SVM": 200,
     }
 
+    downsamplings = [1, 2, 4, 8]
     results = {}
 
-    # for downsample in [1, 2, 4, 8]:
-    for downsample in [8]:
+    # Initialize tqdm with the total number of iterations
+    progress_bar = tqdm(
+        total=len(downsamplings) * len(featurators) * len(classifiers),
+        desc="Processing",
+    )
+
+    for downsample in downsamplings:
 
         for fname, featurator in featurators.items():
 
@@ -127,7 +134,6 @@ def supervised_test(
                     window=featurator.window,
                 )
                 vectors[name] = featurator.transform(patches[name])
-            print("Vectors calculated")
 
             if pca_vis:
                 vector_vis(
@@ -170,6 +176,11 @@ def supervised_test(
                         savedir=Path("/tmp"),
                         name=f"{fname}_D-{downsample}_{cname}",
                     )
+
+                # Update the progress bar by one step
+                progress_bar.update(1)
+
+    progress_bar.close()
 
     for cname, stats in sorted(results.items()):
         print(f"{cname:<30} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}")
