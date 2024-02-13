@@ -89,25 +89,36 @@ def supervised_test(
     )
 
     featurators = {
-        "ResNet": ResNet50(),
-        "EfficientNet": EfficientNetB1(),
-        "RG-1": RG(window=1),
+        "ResNet": [ResNet50()],
+        "EfficientNet": [EfficientNetB1()],
     }
-    for w in [1, 5]:
-        featurators[f"RGB-{w}"] = RGB(window=w)
-        featurators[f"Gray-{w}"] = Gray(window=w)
+
+    for w in [1, 5, 17]:
+        featurators[f"RG-{w}"] = [RG(window=w)]
+        featurators[f"RGB-{w}"] = [RGB(window=w)]
+        featurators[f"Gray-{w}"] = [Gray(window=w)]
 
     for w, d in ((11, 1), (11, 3), (21, 1), (21, 3), (31, 3), (51, 5), (51, 12)):
-        featurators[f"Fourier-W{w}-D{d}"] = Fourier(window=w, downsample=d)
+        featurators[f"Fourier-W{w}-D{d}"] = [Fourier(window=w, downsample=d)]
+
+    for w1, w2, d in ((5, 11, 1), (5, 31, 3)):
+        featurators[f"RGB-{w1}-Fourier-W{w2}-D{d}"] = [
+            RGB(window=w1),
+            Fourier(window=w2, downsample=d),
+        ]
+        featurators[f"RGB-{w1}-EfficientNet"] = [
+            RGB(window=w1),
+            EfficientNetB1(),
+        ]
 
     for d in [1, 4, 8, 16]:
         for k in [64, 128, 512]:
             key = f"M-D{d}-{k}"
-            featurators[key] = Mosaiks(mosdir.joinpath(key))
+            featurators[key] = [Mosaiks(mosdir.joinpath(key))]
 
     # NOTE: featurators is a dictionary, so we can't rely on the *order* of
     # windows matching any particular order. Always use lookups
-    windows = set([f.window for f in featurators.values()])
+    windows = set([f.window for fset in featurators.values() for f in fset])
 
     classifiers = {
         "k-NN": KNeighborsClassifier(n_neighbors=5),
@@ -126,6 +137,7 @@ def supervised_test(
     }
 
     downsamplings = [1, 2, 4, 8]
+    downsamplings = [8]
 
     # Initialize tqdm with the total number of iterations
     progress_bar = tqdm(
@@ -147,10 +159,13 @@ def supervised_test(
             for name, samples in [("train", train_samples), ("test", test_samples)]
         }
 
-        for fname, featurator in featurators.items():
+        for fname, fset in featurators.items():
 
             vectors = {
-                name: featurator.transform(patches[name][featurator.window])
+                name: numpy.hstack([
+                    featurator.transform(patches[name][featurator.window])
+                    for featurator in fset
+                ])
                 for name in ["train", "test"]
             }
 
@@ -187,8 +202,9 @@ def supervised_test(
                 }
 
                 if patch_images:
+                    max_window = max([f.window for f in fset])
                     random_patch_vis(
-                        patches=patches["test"][featurator.window],
+                        patches=patches["test"][max_window],
                         actual=actual,
                         predicted=predicted,
                         number=(10, 16),
@@ -209,7 +225,7 @@ def report_results(results, only_rank=False):
     if not only_rank:
         for cname, stats in sorted(results.items()):
             print(
-                f"{cname:<30} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}"
+                f"{cname:<40} accuracy: {stats['accuracy']:.3f}, F1: {stats['F1']:.3f}"
             )
             save_confusion(cname, stats)
 
