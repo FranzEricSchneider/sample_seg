@@ -104,7 +104,7 @@ def get_patches(imdir, samples, downsample, windows):
         )
 
         for i in sample_ids:
-            _, pixel, label = samples[i]
+            _, pixel, _ = samples[i]
 
             if downsample > 1:
                 pixel = ((numpy.array(pixel) / downsample) + 0.5).astype(int)

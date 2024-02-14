@@ -137,7 +137,6 @@ def supervised_test(
     }
 
     downsamplings = [1, 2, 4, 8]
-    downsamplings = [8]
 
     # Initialize tqdm with the total number of iterations
     progress_bar = tqdm(
@@ -162,10 +161,12 @@ def supervised_test(
         for fname, fset in featurators.items():
 
             vectors = {
-                name: numpy.hstack([
-                    featurator.transform(patches[name][featurator.window])
-                    for featurator in fset
-                ])
+                name: numpy.hstack(
+                    [
+                        featurator.transform(patches[name][featurator.window])
+                        for featurator in fset
+                    ]
+                )
                 for name in ["train", "test"]
             }
 
