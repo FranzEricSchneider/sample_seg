@@ -65,6 +65,9 @@ def write_rgb(path, rgb):
 
 def random_patch_vis(patches, actual, predicted, number, savedir, name):
 
+    # Clean up the name
+    name = name.replace(" ", "_")
+
     chosen = numpy.random.choice(
         range(len(patches)), size=numpy.prod(number), replace=False
     )
