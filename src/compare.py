@@ -318,7 +318,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.saved_results:
-        results = json.load(args.saved_results.open("r"))
+        val_results = json.load(args.saved_results.open("r"))
     else:
         assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
         assert args.samples.is_file(), f"{args.samples.absolute()} is not a file"
@@ -334,7 +334,7 @@ if __name__ == "__main__":
             patch_images=args.patch_images,
         )
         for key, results in (("val", val_results), ("test", test_results)):
-            path = Path(f"/tmp/sweep_val_results_{int(time.time())}.json")
+            path = Path(f"/tmp/sweep_{key}_results_{int(time.time())}.json")
             json.dump(results, path.open("w"), indent=4, sort_keys=True)
             print(f"Results saved to {path}")
 
