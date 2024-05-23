@@ -15,7 +15,6 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     f1_score,
 )
-from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
@@ -26,7 +25,7 @@ from colors import RG, RGB, Gray
 from fourier import Fourier
 from mosaiks import Mosaiks
 from nn import EfficientNetB1, ResNet50
-from sampling import get_patches, get_labels, ingest, smart_downsample
+from sampling import get_patches, get_labels, ingest, smart_downsample, split_by_image
 from vis import random_patch_vis, vector_vis
 
 
@@ -39,7 +38,9 @@ def save_confusion(cname, stats):
     pyplot.close()
 
 
-def rank_stat(results, stat_name, top_x=None, text_values=False):
+def rank_stat(
+    results, stat_name, bottom_x=None, top_x=None, text_values=False, suffix=""
+):
 
     # Sort the dictionary by average error values
     sorted_results = sorted(results.items(), key=lambda x: x[1][stat_name])
@@ -48,9 +49,12 @@ def rank_stat(results, stat_name, top_x=None, text_values=False):
     names, stats = zip(*sorted_results)
     stats = [result[stat_name] for result in stats]
 
+    if bottom_x is not None:
+        names = names[:bottom_x]
+        stats = stats[:bottom_x]
     if top_x is not None:
-        names = names[:top_x]
-        stats = stats[:top_x]
+        names = names[-top_x:]
+        stats = stats[-top_x:]
 
     # Create a bar graph
     figure = pyplot.figure(figsize=(40, 12))
@@ -63,29 +67,43 @@ def rank_stat(results, stat_name, top_x=None, text_values=False):
             pyplot.text(name, point, f"{point:.3f}", ha="center", va="bottom")
         pyplot.ylim(0, 1.2 * max(stats))
 
+    metatext = ""
+    if bottom_x is not None:
+        metatext += f"_bottom_{bottom_x}"
+    if top_x is not None:
+        metatext += f"_top_{top_x}"
+
     pyplot.ylabel(stat_name)
     pyplot.title(f"{stat_name} over treatments")
     pyplot.xticks(rotation=90, ha="right")
     pyplot.grid(axis="y")
     pyplot.tight_layout()
-    path = f"/tmp/ranked_{stat_name}.png"
+    path = f"/tmp/ranked_{stat_name}{metatext}{suffix}.png"
     pyplot.savefig(path)
     pyplot.close()
     print(f"Saved {path}")
 
+    return names
+
 
 def supervised_test(
-    imdir, sample_path, mosdir, pca_vis=False, patch_images=False, test_size=0.3
+    imdir,
+    sample_path,
+    mosdir,
+    pca_vis=False,
+    patch_images=False,
+    val_size=0.25,
+    test_size=0.15,
 ):
 
     # Ingest samples, throwing away random samples until the class numbers are
     # evenly split
     samples = ingest(sample_path, make_even=True)
 
-    train_samples, test_samples = train_test_split(
+    train_samples, val_samples, test_samples = split_by_image(
         samples,
+        val_size=val_size,
         test_size=test_size,
-        random_state=42,
     )
 
     featurators = {
@@ -144,7 +162,8 @@ def supervised_test(
         desc="Processing",
     )
 
-    results = {}
+    val_results = {}
+    test_results = {}
     for downsample in downsamplings:
 
         # Get all patches at once to save time re-opening all those images
@@ -155,7 +174,11 @@ def supervised_test(
                 downsample=downsample,
                 windows=windows,
             )
-            for name, samples in [("train", train_samples), ("test", test_samples)]
+            for name, samples in [
+                ("train", train_samples),
+                ("val", val_samples),
+                ("test", test_samples),
+            ]
         }
 
         for fname, fset in featurators.items():
@@ -167,7 +190,7 @@ def supervised_test(
                         for featurator in fset
                     ]
                 )
-                for name in ["train", "test"]
+                for name in ["train", "val", "test"]
             }
 
             if pca_vis:
@@ -193,19 +216,23 @@ def supervised_test(
                 classifier.fit(train_vectors, train_labels)
 
                 # And test
-                actual = get_labels(test_samples)
-                predicted = classifier.predict(vectors["test"])
-                results[f"{fname}/{cname}/{downsample}"] = {
-                    "accuracy": accuracy_score(actual, predicted),
-                    "F1": f1_score(actual, predicted, average="weighted"),
-                    "actual": actual,
-                    "predicted": predicted.tolist(),
-                }
+                for samples, key, results in (
+                    (test_samples, "test", test_results),
+                    (val_samples, "val", val_results),
+                ):
+                    actual = get_labels(samples)
+                    predicted = classifier.predict(vectors[key])
+                    results[f"{fname}/{cname}/{downsample}"] = {
+                        "accuracy": accuracy_score(actual, predicted),
+                        "F1": f1_score(actual, predicted, average="weighted"),
+                        "actual": actual,
+                        "predicted": predicted.tolist(),
+                    }
 
                 if patch_images:
                     max_window = max([f.window for f in fset])
                     random_patch_vis(
-                        patches=patches["test"][max_window],
+                        patches=patches["val"][max_window],
                         actual=actual,
                         predicted=predicted,
                         number=(10, 16),
@@ -218,10 +245,10 @@ def supervised_test(
 
     progress_bar.close()
 
-    return results
+    return val_results, test_results
 
 
-def report_results(results, only_rank=False):
+def report_results(results, only_rank=False, only=None):
 
     if not only_rank:
         for cname, stats in sorted(results.items()):
@@ -230,7 +257,17 @@ def report_results(results, only_rank=False):
             )
             save_confusion(cname, stats)
 
-    rank_stat(results, "accuracy")
+    if only is None:
+        rank_stat(results, "accuracy", suffix="_val")
+        best = rank_stat(results, "accuracy", top_x=15, suffix="_val")
+        rank_stat(results, "accuracy", bottom_x=25, suffix="_val")
+        return best
+
+    else:
+        # Only display these names
+        results = {key: results[key] for key in only}
+        rank_stat(results, "accuracy", suffix="_test")
+        return None
 
 
 if __name__ == "__main__":
@@ -289,20 +326,22 @@ if __name__ == "__main__":
         profile = Profile()
         profile.enable()
 
-        results = supervised_test(
+        val_results, test_results = supervised_test(
             imdir=args.imdir,
             sample_path=args.samples,
             mosdir=args.mosaic_dir,
             pca_vis=args.pca_vis,
             patch_images=args.patch_images,
         )
-        path = Path(f"/tmp/sweep_results_{int(time.time())}.json")
-        json.dump(results, path.open("w"), indent=4, sort_keys=True)
-        print(f"Results saved to {path}")
+        for key, results in (("val", val_results), ("test", test_results)):
+            path = Path(f"/tmp/sweep_val_results_{int(time.time())}.json")
+            json.dump(results, path.open("w"), indent=4, sort_keys=True)
+            print(f"Results saved to {path}")
 
         profile.disable()
         path = "/tmp/compare.snakeviz"
         profile.dump_stats(path)
         print(f"Profile data saved to {path}")
 
-    report_results(results, only_rank=args.only_rank)
+    best = report_results(val_results, only_rank=args.only_rank)
+    report_results(test_results, only_rank=args.only_rank, only=best)

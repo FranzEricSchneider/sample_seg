@@ -114,10 +114,14 @@ def create_feature_set(impaths, savedir, m=3, k=512, downsample=1):
     whitener.fit(patches)
     patches = whitener.transform(patches)
 
-    numpy.save(savedir.joinpath(PATCHES), patches)
-    numpy.save(savedir.joinpath(ZCA_MEAN), whitener.mean_)
-    numpy.save(savedir.joinpath(ZCA_WHITEN), whitener.whiten_)
-    numpy.save(savedir.joinpath(ZCA_DEWHITEN), whitener.dewhiten_)
+    def save_npy(path, values):
+        numpy.save(path, values)
+        print(f"Saved to {path}")
+
+    save_npy(savedir.joinpath(PATCHES), patches)
+    save_npy(savedir.joinpath(ZCA_MEAN), whitener.mean_)
+    save_npy(savedir.joinpath(ZCA_WHITEN), whitener.whiten_)
+    save_npy(savedir.joinpath(ZCA_DEWHITEN), whitener.dewhiten_)
 
 
 def flatten_image(image, patch_size):
@@ -152,7 +156,11 @@ def visualize_knn(vpath, k=4):
     for label, color in enumerate(distinctipy.get_colors(k)):
         display[numpy.where(labels == label)] = color
     pyplot.imshow(display)
-    pyplot.savefig(vpath.with_suffix(".png"))
+    path = vpath.with_suffix(".png")
+    assert (
+        not path.is_file()
+    ), f"File {path} already exists and would have been overwritten"
+    pyplot.savefig(path)
 
 
 if __name__ == "__main__":
@@ -195,6 +203,7 @@ if __name__ == "__main__":
     assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
 
     impaths = sorted(args.imdir.glob("*jpg"))
+    assert len(impaths) > 0, "Found no *jpg images"
 
     if not args.savedir.is_dir():
         args.savedir.mkdir()

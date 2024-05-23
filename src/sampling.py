@@ -9,6 +9,7 @@ import json
 import numpy
 from pathlib import Path
 from sklearn.cluster import KMeans
+from sklearn.model_selection import train_test_split
 
 
 CLASSES = ("not-plant", "plant")
@@ -32,7 +33,7 @@ def create_samples(imdir, rename=None):
             name = impath.name
 
         bgr = cv2.imread(str(impath))
-        blue = numpy.all(bgr == (255, 0, 0), axis=2)
+        blue = numpy.all(bgr == (255, 38, 0), axis=2)
         red = numpy.all(bgr == (0, 0, 255), axis=2)
         if numpy.any(blue):
             for i, j in zip(*numpy.where(blue)):
@@ -45,8 +46,10 @@ def create_samples(imdir, rename=None):
 
 
 def ingest(path, make_even=False):
+
     assert path.name.endswith(".json"), f"{path} must be json"
     samples = json.load(path.open("r"))
+
     if make_even:
         labels = numpy.array(get_labels(samples))
         counted = Counter(labels)
@@ -61,8 +64,45 @@ def ingest(path, make_even=False):
                     numpy.random.choice(choices, size=least, replace=False).tolist()
                 )
         return [samples[i] for i in sorted(include)]
+
     else:
         return samples
+
+
+def split_by_image(samples, val_size, test_size):
+
+    # Split the images up into different groups
+    imnames = sorted(set([sample[0] for sample in samples]))
+    train_imnames, temp_imnames = train_test_split(
+        imnames,
+        test_size=(val_size + test_size),
+        random_state=42,
+    )
+    val_imnames, test_imnames = train_test_split(
+        temp_imnames,
+        test_size=test_size / (val_size + test_size),
+        random_state=42,
+    )
+
+    # Save these names so other tests can potentially reference them
+    path = Path("/tmp/sample_seg_file_breakdown.json")
+    json.dump(
+        {
+            "train": train_imnames,
+            "val": val_imnames,
+            "test": test_imnames,
+        },
+        path.open("w"),
+        indent=4,
+        sort_keys=True,
+    )
+    print(f"Saved train/val/test split to {path}")
+
+    # Then bookkeep which samples correspond to which images
+    def allocate(names):
+        return [sample for sample in samples if sample[0] in names]
+
+    return allocate(train_imnames), allocate(val_imnames), allocate(test_imnames)
 
 
 def get_patches(imdir, samples, downsample, windows):
@@ -160,5 +200,3 @@ if __name__ == "__main__":
 
     samples = create_samples(args.imdir, rename=".jpg")
     json.dump(samples, args.save.open("w"), indent=4)
-
-    random_patch_vis(patches, actual, predicted, number, savedir, name)
