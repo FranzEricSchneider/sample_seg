@@ -3,7 +3,9 @@ File for high-level tests of the lower-level components
 """
 
 import argparse
+from collections import defaultdict
 from cProfile import Profile
+import joblib
 import json
 from matplotlib import pyplot
 import numpy
@@ -86,25 +88,8 @@ def rank_stat(
     return names
 
 
-def supervised_test(
-    imdir,
-    sample_path,
-    mosdir,
-    pca_vis=False,
-    patch_images=False,
-    val_size=0.25,
-    test_size=0.15,
-):
-
-    # Ingest samples, throwing away random samples until the class numbers are
-    # evenly split
-    samples = ingest(sample_path, make_even=True)
-
-    train_samples, val_samples, test_samples = split_by_image(
-        samples,
-        val_size=val_size,
-        test_size=test_size,
-    )
+def get_featurators(mosdir):
+    """Get the common set we want to test"""
 
     featurators = {
         "ResNet": [ResNet50()],
@@ -138,20 +123,52 @@ def supervised_test(
     # windows matching any particular order. Always use lookups
     windows = set([f.window for fset in featurators.values() for f in fset])
 
+    return featurators, windows
+
+
+def extract_patches(imdir, downsample, windows, names, sample_sets):
+    return {
+        name: get_patches(
+            imdir=imdir,
+            samples=samples,
+            downsample=downsample,
+            windows=windows,
+        )
+        for name, samples in zip(names, sample_sets)
+    }
+
+
+def extract_vectors(patches, fset, names):
+    return {
+        name: numpy.hstack(
+            [
+                featurator.transform(patches[name][featurator.window])
+                for featurator in fset
+            ]
+        )
+        for name in names
+    }
+
+
+def train_classifiers(
+    imdir,
+    train_samples,
+    mosdir,
+    pca_vis=False,
+    val_size=0.25,
+    test_size=0.15,
+):
+
+    featurators, windows = get_featurators(mosdir)
+
     classifiers = {
         "k-NN": KNeighborsClassifier(n_neighbors=5),
-        "Decision Tree": DecisionTreeClassifier(),
-        "Random Forest": RandomForestClassifier(n_estimators=50),
-        "RBF SVM": SVC(kernel="rbf"),
+        "DecisionTree": DecisionTreeClassifier(),
+        "RandomForest": RandomForestClassifier(n_estimators=50),
+        "RBF-SVM": SVC(kernel="rbf"),
         # NOTE: Too slow to run regularly, AND was consistently a low to mid
         # performer
         # "Linear SVM": SVC(kernel="linear"),
-    }
-
-    # NOTE: Linear SVMs take a long time to fit on many data points. Downsample
-    # the points for them somehow.
-    classifier_limits = {
-        "Linear SVM": 200,
     }
 
     downsamplings = [1, 2, 4, 8]
@@ -159,39 +176,19 @@ def supervised_test(
     # Initialize tqdm with the total number of iterations
     progress_bar = tqdm(
         total=len(downsamplings) * len(featurators) * len(classifiers),
-        desc="Processing",
+        desc="Training",
     )
 
-    val_results = {}
-    test_results = {}
+    saved_classifiers = defaultdict(list)
+
     for downsample in downsamplings:
 
         # Get all patches at once to save time re-opening all those images
-        patches = {
-            name: get_patches(
-                imdir=imdir,
-                samples=samples,
-                downsample=downsample,
-                windows=windows,
-            )
-            for name, samples in [
-                ("train", train_samples),
-                ("val", val_samples),
-                ("test", test_samples),
-            ]
-        }
+        patches = extract_patches(imdir, downsample, windows, ["train"], [train_samples])
 
         for fname, fset in featurators.items():
 
-            vectors = {
-                name: numpy.hstack(
-                    [
-                        featurator.transform(patches[name][featurator.window])
-                        for featurator in fset
-                    ]
-                )
-                for name in ["train", "val", "test"]
-            }
+            vectors = extract_vectors(patches, fset, ["train"])
 
             if pca_vis:
                 vector_vis(
@@ -205,45 +202,79 @@ def supervised_test(
 
                 train_labels = get_labels(train_samples)
                 train_vectors = vectors["train"]
-                if cname in classifier_limits:
-                    train_vectors, indices = smart_downsample(
-                        train_vectors,
-                        classifier_limits[cname],
-                    )
-                    train_labels = [train_labels[i] for i in indices]
 
                 # Train
                 classifier.fit(train_vectors, train_labels)
 
-                # And test
-                for samples, key, results in (
-                    (test_samples, "test", test_results),
-                    (val_samples, "val", val_results),
-                ):
-                    actual = get_labels(samples)
-                    predicted = classifier.predict(vectors[key])
-                    results[f"{fname}/{cname}/{downsample}"] = {
-                        "accuracy": accuracy_score(actual, predicted),
-                        "F1": f1_score(actual, predicted, average="weighted"),
-                        "actual": actual,
-                        "predicted": predicted.tolist(),
-                    }
-
-                if patch_images:
-                    max_window = max([f.window for f in fset])
-                    random_patch_vis(
-                        patches=patches["val"][max_window],
-                        actual=actual,
-                        predicted=predicted,
-                        number=(10, 16),
-                        savedir=Path("/tmp"),
-                        name=f"{fname}_D-{downsample}_{cname}",
-                    )
+                # Save the trained classifier
+                path = f"/tmp/{fname}:{cname}:{downsample}.pkl"
+                joblib.dump(classifier, path)
+                saved_classifiers[downsample].append(path)
 
                 # Update the progress bar by one step
                 progress_bar.update(1)
 
     progress_bar.close()
+
+    return saved_classifiers
+
+
+def supervised_test(imdir, mosdir, val_samples, test_samples, saved_classifiers, patch_images=False):
+
+    featurators, windows = get_featurators(mosdir)
+
+    val_results = {}
+    test_results = {}
+
+    # Initialize tqdm with the total number of iterations
+    progress_bar = tqdm(
+        total=sum([len(v) for v in saved_classifiers.values()]),
+        desc="Testing",
+    )
+
+    for downsample, classifier_sets in saved_classifiers.items():
+
+        # Get all patches at once to save time re-opening all those images
+        patches = extract_patches(imdir, downsample, windows, ["val", "test"], [val_samples, test_samples])
+
+        for classifier_path in classifier_sets:
+
+            # Figure out which featurator we're referencing
+            cname = Path(classifier_path).stem
+            fname = cname.split(":")[0]
+            fset = featurators[fname]
+
+            # Load
+            vectors = extract_vectors(patches, fset, ["val", "test"])
+            classifier = joblib.load(classifier_path)
+
+            # And test
+            for samples, key, results in (
+                (test_samples, "test", test_results),
+                (val_samples, "val", val_results),
+            ):
+                actual = get_labels(samples)
+                predicted = classifier.predict(vectors[key])
+                results[cname] = {
+                    "accuracy": accuracy_score(actual, predicted),
+                    "F1": f1_score(actual, predicted, average="weighted"),
+                    "actual": actual,
+                    "predicted": predicted.tolist(),
+                }
+
+            if patch_images:
+                max_window = max([f.window for f in fset])
+                random_patch_vis(
+                    patches=patches["val"][max_window],
+                    actual=actual,
+                    predicted=predicted,
+                    number=(10, 16),
+                    savedir=Path("/tmp"),
+                    name=cname,
+                )
+
+            # Update the progress bar by one step
+            progress_bar.update(1)
 
     return val_results, test_results
 
@@ -326,13 +357,30 @@ if __name__ == "__main__":
         profile = Profile()
         profile.enable()
 
-        val_results, test_results = supervised_test(
+        # Ingest samples, throwing away random samples until the class numbers are
+        # evenly split
+        train_samples, val_samples, test_samples = split_by_image(
+            ingest(args.samples, make_even=True),
+            val_size=0.25,
+            test_size=0.15,
+        )
+
+        saved_classifiers = train_classifiers(
             imdir=args.imdir,
-            sample_path=args.samples,
+            train_samples=train_samples,
             mosdir=args.mosaic_dir,
             pca_vis=args.pca_vis,
+        )
+
+        val_results, test_results = supervised_test(
+            imdir=args.imdir,
+            mosdir=args.mosaic_dir,
+            val_samples=val_samples,
+            test_samples=test_samples,
+            saved_classifiers=saved_classifiers,
             patch_images=args.patch_images,
         )
+
         for key, results in (("val", val_results), ("test", test_results)):
             path = Path(f"/tmp/sweep_{key}_results_{int(time.time())}.json")
             json.dump(results, path.open("w"), indent=4, sort_keys=True)
