@@ -74,11 +74,19 @@ def visualize(savedir, imdir, mpaths, samples):
         image = rgb01(imdir / (mpath.stem + ".jpg"))
         mask_im = mask_rgb(mask)
 
+        # Be a little smart about marker sizing
+        if len(relevant) > 1000:
+            s1 = 1
+            s2 = 2
+        else:
+            s1 = 10
+            s2 = 20
+
         # Highlight the labeled spots on the original image
         im_high = image.copy()
         for _, pixel, plant in relevant:
             color_area(
-                im_high, *pixel, 10, [0, 1, 0] if plant == "plant" else [1, 0, 0.6]
+                im_high, *pixel, s1, [0, 1, 0] if plant == "plant" else [1, 0, 0.6]
             )
 
         # Highligh the labeled spots on the mask
@@ -86,9 +94,9 @@ def visualize(savedir, imdir, mpaths, samples):
         for _, pixel, plant in relevant:
             # Check whether the mask matches the label
             correct = (plant == "plant") == mask[pixel[0], pixel[1]]
-            color_area(im_high, *pixel, 20, [1, 1, 1] if correct else [0, 0, 0])
+            color_area(m_high, *pixel, s2, [1, 1, 1] if correct else [0, 0, 0])
             color_area(
-                im_high, *pixel, 10, [0, 1, 0] if plant == "plant" else [1, 0, 0.6]
+                m_high, *pixel, s1, [0, 1, 0] if plant == "plant" else [1, 0, 0.6]
             )
 
         mdir = savedir / f"{mpath.stem}"
@@ -128,7 +136,7 @@ def main():
     args = parser.parse_args()
 
     mpaths = sorted(args.maskdir.glob("*.npy"))
-    samples = ingest(args.samples, make_even=True)
+    samples = ingest(args.samples, make_even=False)
 
     results = score(mpaths, samples)
     print(f"Accuracy score: {results['accuracy']}")

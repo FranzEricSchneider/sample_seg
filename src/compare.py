@@ -184,7 +184,9 @@ def train_classifiers(
     for downsample in downsamplings:
 
         # Get all patches at once to save time re-opening all those images
-        patches = extract_patches(imdir, downsample, windows, ["train"], [train_samples])
+        patches = extract_patches(
+            imdir, downsample, windows, ["train"], [train_samples]
+        )
 
         for fname, fset in featurators.items():
 
@@ -219,7 +221,9 @@ def train_classifiers(
     return saved_classifiers
 
 
-def supervised_test(imdir, mosdir, val_samples, test_samples, saved_classifiers, patch_images=False):
+def supervised_test(
+    imdir, mosdir, val_samples, test_samples, saved_classifiers, patch_images=False
+):
 
     featurators, windows = get_featurators(mosdir)
 
@@ -235,7 +239,9 @@ def supervised_test(imdir, mosdir, val_samples, test_samples, saved_classifiers,
     for downsample, classifier_sets in saved_classifiers.items():
 
         # Get all patches at once to save time re-opening all those images
-        patches = extract_patches(imdir, downsample, windows, ["val", "test"], [val_samples, test_samples])
+        patches = extract_patches(
+            imdir, downsample, windows, ["val", "test"], [val_samples, test_samples]
+        )
 
         for classifier_path in classifier_sets:
 
@@ -318,7 +324,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-m",
-        "--mosaic-dir",
+        "--mosaik-dir",
         help="Directory where a MOSAIKS featurator can be found",
         type=Path,
     )
@@ -368,13 +374,13 @@ if __name__ == "__main__":
         saved_classifiers = train_classifiers(
             imdir=args.imdir,
             train_samples=train_samples,
-            mosdir=args.mosaic_dir,
+            mosdir=args.mosaik_dir,
             pca_vis=args.pca_vis,
         )
 
         val_results, test_results = supervised_test(
             imdir=args.imdir,
-            mosdir=args.mosaic_dir,
+            mosdir=args.mosaik_dir,
             val_samples=val_samples,
             test_samples=test_samples,
             saved_classifiers=saved_classifiers,
