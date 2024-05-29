@@ -59,7 +59,12 @@ def rank_stat(
         stats = stats[-top_x:]
 
     # Create a bar graph
-    figure = pyplot.figure(figsize=(40, 12))
+    if len(names) > 60:
+        figsize = (30, 8)
+    else:
+        figsize = (16, 6)
+
+    figure = pyplot.figure(figsize=figsize)
     pyplot.bar(names, stats)
     pyplot.yticks(numpy.arange(0, 1.05, 0.05))
     pyplot.ylim(0.9 * min(stats), min(1.0, 1.1 * max(stats)))
@@ -81,11 +86,39 @@ def rank_stat(
     pyplot.grid(axis="y")
     pyplot.tight_layout()
     path = f"/tmp/ranked_{stat_name}{metatext}{suffix}.png"
-    pyplot.savefig(path)
+    pyplot.savefig(path, dpi=200)
     pyplot.close()
     print(f"Saved {path}")
 
     return names
+
+
+def rank_broad_strokes(
+    results, stat_name, split_index, dtype, name, suffix="", lose_dash=False
+):
+
+    re_sorted = defaultdict(list)
+    for cname, stats in results.items():
+        key = cname.split(":")[split_index]
+        if lose_dash:
+            if "-" in key:
+                key = key.split("-")[0]
+        key = dtype(key)
+        re_sorted[key].append(stats[stat_name])
+
+    x = sorted(re_sorted.keys())
+    y = [numpy.average(re_sorted[key]) for key in x]
+
+    pyplot.scatter(x, y)
+
+    pyplot.xlabel(name)
+    pyplot.ylabel(stat_name)
+    pyplot.title(f"{name} - overall performance [{suffix.replace('_', '')}]")
+    pyplot.tight_layout()
+    path = f"/tmp/broad_strokes_{name.replace(' ', '_')}_{stat_name}{suffix}.png"
+    pyplot.savefig(path)
+    pyplot.close()
+    print(f"Saved {path}")
 
 
 def get_featurators(mosdir):
@@ -294,16 +327,33 @@ def report_results(results, only_rank=False, only=None):
             )
             save_confusion(cname, stats)
 
+    for idx, dtype, name, lose_dash in (
+        (0, str, "Featurator", True),
+        (1, str, "Classifier", False),
+        (-1, int, "Initial Downsampling", False),
+    ):
+        rank_broad_strokes(
+            results=results,
+            stat_name="accuracy",
+            split_index=idx,
+            dtype=dtype,
+            name=name,
+            lose_dash=lose_dash,
+            suffix="_val" if only is None else "_test",
+        )
+
     if only is None:
-        rank_stat(results, "accuracy", suffix="_val")
-        best = rank_stat(results, "accuracy", top_x=15, suffix="_val")
-        rank_stat(results, "accuracy", bottom_x=25, suffix="_val")
+        for stat in ["F1", "accuracy"]:
+            rank_stat(results, stat, suffix="_val")
+            best = rank_stat(results, stat, top_x=15, suffix="_val")
+            rank_stat(results, stat, bottom_x=25, suffix="_val")
         return best
 
     else:
         # Only display these names
         results = {key: results[key] for key in only}
-        rank_stat(results, "accuracy", suffix="_test")
+        for stat in ["F1", "accuracy"]:
+            rank_stat(results, stat, suffix="_test")
         return None
 
 
@@ -344,6 +394,7 @@ if __name__ == "__main__":
         "-r",
         "--saved-results",
         help="json file with results we want to re-view",
+        nargs="+",
         type=Path,
     )
     parser.add_argument(
@@ -355,7 +406,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.saved_results:
-        val_results = json.load(args.saved_results.open("r"))
+        assert (
+            len(args.saved_results) == 2
+        ), "We require both val and test results for loading"
+        val_results = json.load(args.saved_results[0].open("r"))
+        test_results = json.load(args.saved_results[1].open("r"))
     else:
         assert args.imdir.is_dir(), f"{args.imdir.absolute()} is not a directory"
         assert args.samples.is_file(), f"{args.samples.absolute()} is not a file"
