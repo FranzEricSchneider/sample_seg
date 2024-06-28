@@ -1,10 +1,14 @@
 import argparse
+import cProfile
 import cv2
 import joblib
 import json
 import numpy
 from pathlib import Path
+from skimage import io
 from sklearn.neighbors import KNeighborsClassifier
+from skimage.segmentation import slic
+from skimage.util import img_as_float
 from tqdm import tqdm
 
 from compare import get_featurators
@@ -37,23 +41,71 @@ class StitchKNN:
         # Make an (N, 2) array of all the pixels we want to fill in and predict
         grid_i, grid_j = numpy.meshgrid(range(size[0]), range(size[1]), indexing="ij")
         pixels = numpy.c_[grid_i.ravel(), grid_j.ravel()]
-        labels = self.knn.predict(pixels)
+        propagated_labels = self.knn.predict(pixels)
 
         # Convert to the image shape and make it boolean
-        return (labels > 0.5).reshape(size)
+        return (propagated_labels > 0.5).reshape(size)
+
+
+class StitchSLIC:
+    def __init__(self, num_segments, sigma):
+        self.n = num_segments
+        self.sigma = sigma
+        self.indices = None
+
+    def pixels(self, impath, downsample):
+        """
+        NOTE: These in the frame of the full image, you need to downsample them
+        separately if you want the downsampled positions
+        """
+        image = img_as_float(io.imread(impath))[::downsample, ::downsample]
+
+        # The first time through, populate the indices based on image size
+        if self.indices is None:
+            self.indices = numpy.dstack(
+                numpy.meshgrid(
+                    range(image.shape[0]), range(image.shape[1]), indexing="ij"
+                )
+            )
+
+        self.segments = slic(image, n_segments=self.n, sigma=self.sigma)
+        self.ids = sorted(numpy.unique(self.segments))
+
+        for segid in self.ids:
+            mask = self.segments == segid
+            yield (closest_pixel_to_center(self.indices[mask]) * downsample).tolist()
+
+    def stitch(self, impath, downsample, pixels, labels):
+        mask = numpy.zeros(self.segments.shape, dtype=bool)
+        for segid, label in zip(self.ids, labels):
+            if label:
+                mask[self.segments == segid] = True
+        return mask
+
+
+def closest_pixel_to_center(indices):
+
+    # Compute the distances from the center of mass and get the smallest
+    center_of_mass = indices.mean(axis=0)
+    distances = numpy.linalg.norm(indices - center_of_mass, axis=1)
+    closest = numpy.argmin(distances)
+
+    # Return the coordinates of the closest True pixel
+    return indices[closest]
 
 
 STITCHERS = {
     "knn": StitchKNN,
+    "slic": StitchSLIC,
 }
 
 
-def main(imdir, cpath, mosdir, savedir, sname, kwargs):
+def main(imdir, cpath, mosdir, savedir, sname, stitch_downsample, kwargs):
 
     # Load the classifier
     classifier = joblib.load(cpath)
-    fname, _, downsample = cpath.stem.split(":")
-    downsample = int(downsample)
+    fname, _, seg_downsample = cpath.stem.split(":")
+    seg_downsample = int(seg_downsample)
 
     # Choose
     stitcher = STITCHERS[sname](**kwargs)
@@ -67,14 +119,16 @@ def main(imdir, cpath, mosdir, savedir, sname, kwargs):
 
     for impath in tqdm(sorted(imdir.glob("*.jpg"))):
 
-        # Mimic the hand-labeled sample format (imname, [pixel], label), just leave
-        # the label as None
+        # Mimic the hand-labeled sample format (imname, [pixel], label), just
+        # leave the label as None. By design these samples are in the frame of
+        # the full image
         samples = [
-            (impath.name, pixel, None) for pixel in stitcher.pixels(impath, downsample)
+            (impath.name, pixel, None)
+            for pixel in stitcher.pixels(impath, stitch_downsample)
         ]
 
         # Extract snippets from the images
-        patches = get_patches(imdir, samples, downsample, windows)
+        patches = get_patches(imdir, samples, seg_downsample, windows)
 
         # Turn those into vectors and process them
         vectors = numpy.hstack(
@@ -84,8 +138,8 @@ def main(imdir, cpath, mosdir, savedir, sname, kwargs):
 
         mask = stitcher.stitch(
             impath,
-            downsample,
-            numpy.array([pixel for _, pixel, _ in samples]) / downsample,
+            stitch_downsample,
+            numpy.array([pixel for _, pixel, _ in samples]) / stitch_downsample,
             predicted,
         )
         numpy.save(savedir / f"{impath.stem}.npy", mask)
@@ -127,9 +181,17 @@ if __name__ == "__main__":
         type=Path,
     )
     parser.add_argument(
+        "-d",
+        "--stitch-downsample",
+        help="Downsampling for the stitched image (may affect stitch process,"
+        " but is handled separately from classification)",
+        default=4,
+        type=int,
+    )
+    parser.add_argument(
         "-k",
         "--stitcher-kwargs",
-        help="json encoded string with stitcher kwargs",
+        help='json encoded string with stitcher kwargs, e.g. \'{"num_segments": 10000, "sigma": 5}\'',
         default=json.dumps({"frequency": 8, "k": 3}),
     )
     parser.add_argument(
@@ -140,11 +202,20 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    profile = cProfile.Profile()
+    profile.enable()
+
     main(
         imdir=args.imdir,
         cpath=args.classifier_path,
         mosdir=args.mosaik_dir,
         savedir=args.save_dir,
         sname=args.stitcher_choice,
+        stitch_downsample=args.stitch_downsample,
         kwargs=json.loads(args.stitcher_kwargs),
     )
+
+    profile.disable()
+    path = args.save_dir / "profile.snakeviz"
+    profile.dump_stats(path)
+    print(f"Saved runtime profile information to {path}")
