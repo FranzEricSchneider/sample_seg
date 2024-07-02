@@ -69,7 +69,7 @@ def ingest(path, make_even=False):
         return samples
 
 
-def split_by_image(samples, val_size, test_size):
+def split_by_image(samples, val_size, test_size, size_limit : int = -1):
 
     # Split the images up into different groups
     imnames = sorted(set([sample[0] for sample in samples]))
@@ -100,7 +100,14 @@ def split_by_image(samples, val_size, test_size):
 
     # Then bookkeep which samples correspond to which images
     def allocate(names):
-        return [sample for sample in samples if sample[0] in names]
+        allocated = [sample for sample in samples if sample[0] in names]
+        if size_limit > 0 and len(allocated) > size_limit:
+            return [
+                allocated[index]
+                for index in numpy.random.choice(range(len(allocated)), size=size_limit, replace=False)
+            ]
+        else:
+            return allocated
 
     return allocate(train_imnames), allocate(val_imnames), allocate(test_imnames)
 

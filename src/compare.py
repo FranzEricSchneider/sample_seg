@@ -419,11 +419,14 @@ if __name__ == "__main__":
         profile.enable()
 
         # Ingest samples, throwing away random samples until the class numbers are
-        # evenly split
+        # evenly split. We also limit the total number of samples pretty
+        # aggressively, as sample_seg is built for a smaller number of
+        # training samples
         train_samples, val_samples, test_samples = split_by_image(
             ingest(args.samples, make_even=True),
-            val_size=0.25,
-            test_size=0.15,
+            val_size=0.3,
+            test_size=0.3,
+            size_limit=50000,
         )
 
         saved_classifiers = train_classifiers(
