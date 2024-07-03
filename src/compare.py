@@ -4,12 +4,14 @@ File for high-level tests of the lower-level components
 
 import argparse
 from collections import defaultdict
+import json
+from pathlib import Path
+import time
+
 from cProfile import Profile
 import joblib
-import json
 from matplotlib import pyplot
 import numpy
-from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
@@ -20,14 +22,13 @@ from sklearn.metrics import (
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
-import time
 from tqdm import tqdm
 
 from colors import RG, RGB, Gray
 from fourier import Fourier
 from mosaiks import Mosaiks
 from nn import EfficientNetB1, ResNet50
-from sampling import get_patches, get_labels, ingest, smart_downsample, split_by_image
+from sampling import get_patches, get_labels, ingest, split_by_image
 from vis import random_patch_vis, vector_vis
 
 
@@ -64,7 +65,7 @@ def rank_stat(
     else:
         figsize = (16, 6)
 
-    figure = pyplot.figure(figsize=figsize)
+    pyplot.figure(figsize=figsize)
     pyplot.bar(names, stats)
     pyplot.yticks(numpy.arange(0, 1.05, 0.05))
     pyplot.ylim(0.9 * min(stats), min(1.0, 1.1 * max(stats)))
@@ -94,12 +95,12 @@ def rank_stat(
 
 
 def rank_broad_strokes(
-    results, stat_name, split_index, dtype, name, suffix="", lose_dash=False
+    results, stat_name, split_index, dtype, name, suffix="", spacer=":", lose_dash=False
 ):
 
     re_sorted = defaultdict(list)
     for cname, stats in results.items():
-        key = cname.split(":")[split_index]
+        key = cname.split(spacer)[split_index]
         if lose_dash:
             if "-" in key:
                 key = key.split("-")[0]
@@ -185,11 +186,12 @@ def extract_vectors(patches, fset, names):
 
 def train_classifiers(
     imdir,
+    save_dir,
     train_samples,
     mosdir,
     pca_vis=False,
-    val_size=0.25,
-    test_size=0.15,
+    spacer=":",
+    respect_existing=False,
 ):
 
     featurators, windows = get_featurators(mosdir)
@@ -223,6 +225,22 @@ def train_classifiers(
 
         for fname, fset in featurators.items():
 
+            # Only consider candidates that don't exist, unless we are
+            # overwriting the existing files
+            candidates = []
+            for cname, classifier in classifiers.items():
+                path = save_dir / f"{fname}{spacer}{cname}{spacer}{downsample}.pkl"
+                if path.is_file() and respect_existing:
+                    print(f"Found existing classifier, continuing:\n\t{path}")
+                    saved_classifiers[downsample].append(path)
+                    progress_bar.update(1)
+                    continue
+                candidates.append((cname, classifier, path))
+
+            # Check if we have any candidates left
+            if len(candidates) == 0:
+                continue
+
             vectors = extract_vectors(patches, fset, ["train"])
 
             if pca_vis:
@@ -233,17 +251,15 @@ def train_classifiers(
                     name=f"{fname}_D-{downsample}",
                 )
 
-            for cname, classifier in classifiers.items():
+            for cname, classifier, path in candidates:
 
                 train_labels = get_labels(train_samples)
-                train_vectors = vectors["train"]
 
                 # Train
-                classifier.fit(train_vectors, train_labels)
+                classifier.fit(vectors["train"], train_labels)
 
                 # Save the trained classifier
-                path = f"/tmp/{fname}:{cname}:{downsample}.pkl"
-                joblib.dump(classifier, path)
+                joblib.dump(classifier, str(path))
                 saved_classifiers[downsample].append(path)
 
                 # Update the progress bar by one step
@@ -255,13 +271,18 @@ def train_classifiers(
 
 
 def supervised_test(
-    imdir, mosdir, val_samples, test_samples, saved_classifiers, patch_images=False
+    imdir,
+    mosdir,
+    save_dir,
+    val_samples,
+    test_samples,
+    saved_classifiers,
+    patch_images=False,
+    spacer=":",
+    respect_existing=False,
 ):
 
     featurators, windows = get_featurators(mosdir)
-
-    val_results = {}
-    test_results = {}
 
     # Initialize tqdm with the total number of iterations
     progress_bar = tqdm(
@@ -280,26 +301,45 @@ def supervised_test(
 
             # Figure out which featurator we're referencing
             cname = Path(classifier_path).stem
-            fname = cname.split(":")[0]
+            fname = cname.split(spacer)[0]
             fset = featurators[fname]
 
             # Load
-            vectors = extract_vectors(patches, fset, ["val", "test"])
-            classifier = joblib.load(classifier_path)
+            try:
+                classifier = joblib.load(classifier_path)
+            except ValueError:
+                # If a classifier is bad, skip it and notify
+                print(f"Error loading {classifier_path}, skipping")
+                continue
 
             # And test
-            for samples, key, results in (
-                (test_samples, "test", test_results),
-                (val_samples, "val", val_results),
+            for samples, key in (
+                (val_samples, "val"),
+                (test_samples, "test"),
             ):
+
+                # Check for existing results
+                path = save_dir / key / f"{cname}.json"
+                if path.is_file() and respect_existing:
+                    print(f"Found existing results, continuing:\n\t{path}")
+                    continue
+
+                # If none found, create the results
                 actual = get_labels(samples)
-                predicted = classifier.predict(vectors[key])
-                results[cname] = {
-                    "accuracy": accuracy_score(actual, predicted),
-                    "F1": f1_score(actual, predicted, average="weighted"),
-                    "actual": actual,
-                    "predicted": predicted.tolist(),
-                }
+                predicted = classifier.predict(
+                    extract_vectors(patches, fset, [key])[key]
+                )
+                json.dump(
+                    {
+                        "accuracy": accuracy_score(actual, predicted),
+                        "F1": f1_score(actual, predicted, average="weighted"),
+                        "actual": actual,
+                        "predicted": predicted.tolist(),
+                    },
+                    path.open("w"),
+                    indent=4,
+                    sort_keys=True,
+                )
 
             if patch_images:
                 max_window = max([f.window for f in fset])
@@ -315,10 +355,17 @@ def supervised_test(
             # Update the progress bar by one step
             progress_bar.update(1)
 
+    # Reload the saved results
+    val_results = {}
+    test_results = {}
+    for key, results in [("val", val_results), ("test", test_results)]:
+        for path in sorted((save_dir / key).glob("*.json")):
+            results[path.stem] = json.load(path.open("r"))
+
     return val_results, test_results
 
 
-def report_results(results, only_rank=False, only=None):
+def report_results(results, only_rank=False, only=None, spacer=":"):
 
     if not only_rank:
         for cname, stats in sorted(results.items()):
@@ -338,6 +385,7 @@ def report_results(results, only_rank=False, only=None):
             split_index=idx,
             dtype=dtype,
             name=name,
+            spacer=spacer,
             lose_dash=lose_dash,
             suffix="_val" if only is None else "_test",
         )
@@ -349,15 +397,13 @@ def report_results(results, only_rank=False, only=None):
             rank_stat(results, stat, bottom_x=25, suffix="_val")
         return best
 
-    else:
-        # Only display these names
-        results = {key: results[key] for key in only}
-        for stat in ["F1", "accuracy"]:
-            rank_stat(results, stat, suffix="_test")
-        return None
+    # Only display these names
+    results = {key: results[key] for key in only}
+    for stat in ["F1", "accuracy"]:
+        rank_stat(results, stat, suffix="_test")
+    return None
 
-
-if __name__ == "__main__":
+def main():
 
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -398,6 +444,27 @@ if __name__ == "__main__":
         type=Path,
     )
     parser.add_argument(
+        "-R",
+        "--respect-existing",
+        help="If given, we will check for existing classifiers in the save"
+        " dir and skip if we see them",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-s",
+        "--save-dir",
+        help="Directory to store trained classifiers in",
+        type=Path,
+        default=Path("/tmp/"),
+    )
+    parser.add_argument(
+        "-S",
+        "--spacer",
+        help="String that will be placed between settings in the saved "
+        " classifier file names",
+        default=":",
+    )
+    parser.add_argument(
         "-t",
         "--patch-images",
         help="Whether to run vis of patches into /tmp/. Somewhat slow",
@@ -426,23 +493,36 @@ if __name__ == "__main__":
             ingest(args.samples, make_even=True),
             val_size=0.3,
             test_size=0.3,
-            size_limit=50000,
+            size_limit=30000,
         )
 
         saved_classifiers = train_classifiers(
             imdir=args.imdir,
+            save_dir=args.save_dir,
             train_samples=train_samples,
             mosdir=args.mosaik_dir,
             pca_vis=args.pca_vis,
+            spacer=args.spacer,
+            respect_existing=args.respect_existing,
         )
+
+        # Make folders for supervised results in case it dies partway through
+        # and needs to be restarted
+        for key in ["val", "test"]:
+            result_dir = args.save_dir / key
+            if not result_dir.is_dir():
+                result_dir.mkdir()
 
         val_results, test_results = supervised_test(
             imdir=args.imdir,
             mosdir=args.mosaik_dir,
+            save_dir=args.save_dir,
             val_samples=val_samples,
             test_samples=test_samples,
             saved_classifiers=saved_classifiers,
             patch_images=args.patch_images,
+            spacer=args.spacer,
+            respect_existing=args.respect_existing,
         )
 
         for key, results in (("val", val_results), ("test", test_results)):
@@ -455,5 +535,11 @@ if __name__ == "__main__":
         profile.dump_stats(path)
         print(f"Profile data saved to {path}")
 
-    best = report_results(val_results, only_rank=args.only_rank)
-    report_results(test_results, only_rank=args.only_rank, only=best)
+    best = report_results(val_results, only_rank=args.only_rank, spacer=args.spacer)
+    report_results(
+        test_results, only_rank=args.only_rank, only=best, spacer=args.spacer
+    )
+
+
+if __name__ == "__main__":
+    main()
