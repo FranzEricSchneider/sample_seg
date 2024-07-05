@@ -74,13 +74,8 @@ def visualize(savedir, imdir, mpaths, samples):
         image = rgb01(imdir / (mpath.stem + ".jpg"))
         mask_im = mask_rgb(mask)
 
-        # Be a little smart about marker sizing
-        if len(relevant) > 1000:
-            s1 = 1
-            s2 = 2
-        else:
-            s1 = 10
-            s2 = 20
+        s1 = 10
+        s2 = 20
 
         # Highlight the labeled spots on the original image
         im_high = image.copy()
@@ -95,6 +90,8 @@ def visualize(savedir, imdir, mpaths, samples):
             # Check whether the mask matches the label
             correct = (plant == "plant") == mask[pixel[0], pixel[1]]
             color_area(m_high, *pixel, s2, [1, 1, 1] if correct else [0, 0, 0])
+
+        for _, pixel, plant in relevant:
             color_area(
                 m_high, *pixel, s1, [0, 1, 0] if plant == "plant" else [1, 0, 0.6]
             )
