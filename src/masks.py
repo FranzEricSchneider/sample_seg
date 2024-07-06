@@ -119,9 +119,12 @@ def main():
         type=Path,
     )
     parser.add_argument(
-        "samples",
-        help="Path to collected sample json file",
+        "-S",
+        "--samples",
+        help="Path to collected sample json file, if none are given then we"
+        " will visualize results with no scores given",
         type=Path,
+        default=None
     )
     parser.add_argument(
         "-s",
@@ -133,11 +136,14 @@ def main():
     args = parser.parse_args()
 
     mpaths = sorted(args.maskdir.glob("*.npy"))
-    samples = ingest(args.samples, make_even=False)
 
-    results = score(mpaths, samples)
-    print(f"Accuracy score: {results['accuracy']}")
-    print(f"F1 score: {results['F1']}")
+    if isinstance(args.samples, Path):
+        samples = ingest(args.samples, make_even=False)
+        results = score(mpaths, samples)
+        print(f"Accuracy score: {results['accuracy']}")
+        print(f"F1 score: {results['F1']}")
+    else:
+        samples = []
 
     visualize(args.savedir, args.imdir, mpaths, samples)
 
